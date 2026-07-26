@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>passage</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-user-select:none; user-select:none; }
+  html, body {
+    width:100%; height:100%;
+    background:#0a0a0a; color:#eaeaea;
+    font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
+    overflow:hidden;
+    touch-action:none;
+  }
+  #app { position:relative; width:100vw; height:100vh; }
+
+  .screen {
+    position:absolute; inset:0;
+    display:flex; flex-direction:column;
+    align-items:center; justify-content:flex-start;
+    padding: 6vh 6vw 4vh;
+    opacity:0; pointer-events:none;
+    transition: opacity 0.6s ease;
+  }
+  .screen.active { opacity:1; pointer-events:auto; }
+
+  .prompt {
+    font-size: 20px;
+    letter-spacing: 0.02em;
+    color:#9a9a9a;
+    margin-bottom: 24px;
+    text-align:center;
+  }
+
+  /* ---- 手写画布通用容器 ---- */
+  .canvasWrap {
+    position: relative;
+    width: 100%;
+    max-width: 720px;
+    flex: 1;
+    min-height: 0;
+    border-bottom: 1px solid #2a2a2a;
+  }
+  .canvasWrap canvas {
+    position: absolute;
+    top:0; left:0;
+    touch-action: none;
+  }
+  #writtenLayer { pointer-events:none; } /* step2 里承载step1内容的静态图层，本身不响应笔触 */
+
+  /* ---- 通用按钮 ---- */
+  .btn {
+    margin-top: 28px;
+    padding: 14px 40px;
+    background: transparent;
+    border: 1px solid #555;
+    color: #ddd;
+    font-size: 16px;
+    letter-spacing: 0.05em;
+    border-radius: 999px;
+    transition: all 0.25s;
+    flex-shrink:0;
+  }
+  .btn:active { background:#fff; color:#000; }
+  .btn.disabled { opacity:0.25; pointer-events:none; }
+  .btnRow { display:flex; gap:16px; }
+  .btnGhost { border-color:#333; color:#777; font-size:13px; padding:10px 24px; }
+
+  /* ---- Step 3 ---- */
+  #step3 { align-items:center; justify-content:center; }
+  #finalLine {
+    font-size: 28px;
+    color:#fff;
+    text-align:center;
+    max-width: 600px;
+    line-height:1.8;
+  }
+
+  /* ---- 调试面板 ---- */
+  #debugPanel {
+    position: fixed; bottom: 0; left: 0; right: 0;
+    background: rgba(0,0,0,0.75);
+    border-top: 1px solid #222;
+    font-family: "SF Mono", Menlo, monospace;
+    font-size: 11px;
+    color: #7fd67f;
+    padding: 8px 12px;
+    max-height: 26vh;
+    overflow-y: auto;
+    z-index: 999;
+    line-height:1.5;
+  }
+  #debugPanel .row { display:flex; gap:14px; flex-wrap:wrap; }
+  #debugPanel .label { color:#666; }
+  #wsRow { display:flex; gap:8px; align-items:center; margin-bottom:6px; flex-wrap:wrap; }
+  #wsRow input {
+    background:#111; border:1px solid #333; color:#ddd;
+    padding:4px 8px; font-size:11px; border-radius:4px; width:220px;
+    font-family: inherit;
+  }
+  #wsRow button {
+    background:#222; border:1px solid #444; color:#ddd;
+    padding:4px 10px; border-radius:4px; font-size:11px;
+  }
+  #wsStatus.connected { color:#7fd67f; }
+  #wsStatus.disconnected { color:#d67f7f; }
+  #toggleDebugBtn {
+    position:fixed; top:14px; right:14px; z-index:1000;
+    background:rgba(255,255,255,0.08); border:1px solid #333;
+    color:#888; font-size:11px; padding:6px 10px; border-radius:6px;
+  }
+</style>
+</head>
+<body>
+<div id="app">
+
+  <!-- Step 1：手写 -->
+  <div id="step1" class="screen active">
+    <div class="prompt">写下一段你正在纠结、焦虑、找不到答案的内容</div>
+    <div class="canvasWrap" id="wrap1">
+      <canvas id="writeCanvas"></canvas>
+    </div>
+    <div class="btnRow">
+      <button class="btn disabled" id="toStep2Btn">继续</button>
+      <button class="btn btnGhost" id="clearStep1Btn">清除重写</button>
+    </div>
+  </div>
+
+  <!-- Step 2：划掉 -->
+  <div id="step2" class="screen">
+    <div class="prompt">用一根线划掉你想暂时放下的部分</div>
+    <div class="canvasWrap" id="wrap2">
+      <canvas id="writtenLayer"></canvas>
+      <canvas id="drawCanvas"></canvas>
+    </div>
+    <button class="btn" id="toStep3Btn">完成</button>
+  </div>
+
+  <!-- Step 3 -->
+  <div id="step3" class="screen">
+    <div id="finalLine"></div>
+    <button class="btn" id="restartBtn">重新开始</button>
+  </div>
+
+</div>
+
+<button id="toggleDebugBtn">debug</button>
+<div id="versionMarker" style="position:fixed; top:14px; left:14px; z-index:1000; font-family:monospace; font-size:10px; color:#555; background:rgba(255,255,255,0.05); padding:4px 8px; border-radius:4px;">v2026-07-24-separate-counters</div>
+<div id="debugPanel" style="display:none;">
+  <div id="wsRow">
+    <input id="wsUrl" value="ws://192.168.1.100:9980" />
+    <button id="wsConnectBtn">连接</button>
+    <span id="wsStatus" class="disconnected">未连接</span>
+  </div>
+  <div class="row">
+    <span><span class="label">step</span> <span id="dbgStep">-</span></span>
+    <span><span class="label">stroke_id</span> <span id="dbgStroke">-</span></span>
+    <span><span class="label">phase</span> <span id="dbgPhase">-</span></span>
+    <span><span class="label">x</span> <span id="dbgX">-</span></span>
+    <span><span class="label">y</span> <span id="dbgY">-</span></span>
+    <span><span class="label">pressure</span> <span id="dbgPressure">-</span></span>
+    <span><span class="label">speed</span> <span id="dbgSpeed">-</span></span>
+    <span><span class="label">pointerType</span> <span id="dbgType">-</span></span>
+  </div>
+  <div class="row" style="margin-top:6px;"><span class="label" style="color:#9ad;">每一笔完成后的汇总(重点看这里):</span></div>
+  <div id="dbgStrokeLog"></div>
+  <div class="row" style="margin-top:6px;"><span class="label">原始逐点消息(仅down/up):</span></div>
+  <div id="dbgLog"></div>
+</div>
+
+<script>
+(function(){
+
+  // ============ 全局状态 ============
+  // 注：stroke 计数不再用全局变量，写字(write)和划线(cross)各自独立计数，
+  // 在 attachPointerCapture 内部按每个画布单独维护，见下方
+  let sessionStart = performance.now();
+  let ws = null;
+  let hasWritten = false;
+
+  const step1 = document.getElementById('step1');
+  const step2 = document.getElementById('step2');
+  const step3 = document.getElementById('step3');
+  const toStep2Btn = document.getElementById('toStep2Btn');
+  const toStep3Btn = document.getElementById('toStep3Btn');
+  const restartBtn = document.getElementById('restartBtn');
+  const clearStep1Btn = document.getElementById('clearStep1Btn');
+  const finalLine = document.getElementById('finalLine');
+
+  const writeCanvas = document.getElementById('writeCanvas');
+  const writeCtx = writeCanvas.getContext('2d');
+  const writtenLayer = document.getElementById('writtenLayer');
+  const writtenCtx = writtenLayer.getContext('2d');
+  const drawCanvas = document.getElementById('drawCanvas');
+  const drawCtx = drawCanvas.getContext('2d');
+
+  const dbg = {
+    step: document.getElementById('dbgStep'),
+    stroke: document.getElementById('dbgStroke'),
+    phase: document.getElementById('dbgPhase'),
+    x: document.getElementById('dbgX'),
+    y: document.getElementById('dbgY'),
+    pressure: document.getElementById('dbgPressure'),
+    speed: document.getElementById('dbgSpeed'),
+    type: document.getElementById('dbgType'),
+    log: document.getElementById('dbgLog'),
+    strokeLog: document.getElementById('dbgStrokeLog'),
+  };
+
+  // ============ 发送数据（debug面板 + 可选 WebSocket）============
+  function sendMessage(msg) {
+    // 实时单点显示、以及"最近逐点消息"日志，只针对逐点(point)类型的消息；
+    // stroke_summary 这种整笔汇总消息结构不一样，不走这段，单独在 onUp 里显示
+    if (msg.type === 'point') {
+      dbg.step.textContent = msg.step;
+      dbg.stroke.textContent = msg.stroke_id;
+      dbg.phase.textContent = msg.phase;
+      dbg.x.textContent = msg.x.toFixed(3);
+      dbg.y.textContent = msg.y.toFixed(3);
+      dbg.pressure.textContent = msg.pressure.toFixed(3);
+      dbg.speed.textContent = msg.speed.toFixed(1);
+      dbg.type.textContent = msg.pointerType;
+
+      if (msg.phase === 'down' || msg.phase === 'up') {
+        const line = document.createElement('div');
+        line.textContent = JSON.stringify(msg);
+        dbg.log.prepend(line);
+        while (dbg.log.children.length > 12) dbg.log.removeChild(dbg.log.lastChild);
+      }
+    }
+
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify(msg));
+    }
+  }
+
+  // ============ WebSocket（可选） ============
+  const wsUrlInput = document.getElementById('wsUrl');
+  const wsConnectBtn = document.getElementById('wsConnectBtn');
+  const wsStatus = document.getElementById('wsStatus');
+
+  wsConnectBtn.addEventListener('click', () => {
+    if (ws && ws.readyState === WebSocket.OPEN) { ws.close(); return; }
+    try {
+      ws = new WebSocket(wsUrlInput.value);
+      wsStatus.textContent = '连接中…';
+      ws.onopen = () => { wsStatus.textContent = '已连接'; wsStatus.className='connected'; };
+      ws.onclose = () => { wsStatus.textContent = '未连接'; wsStatus.className='disconnected'; };
+      ws.onerror = () => { wsStatus.textContent = '连接失败'; wsStatus.className='disconnected'; };
+    } catch(e) { wsStatus.textContent = '地址无效'; }
+  });
+
+  document.getElementById('toggleDebugBtn').addEventListener('click', () => {
+    const panel = document.getElementById('debugPanel');
+    panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+  });
+
+  // ============ 通用：给一个 canvas 挂上手写笔迹捕捉逻辑 ============
+  // stepName: 'write' | 'cross'  —— 只用来标记数据来源，逻辑完全一样
+  function attachPointerCapture(canvas, ctx, stepName, options) {
+    options = options || {};
+    let drawing = false;
+    let lastPoint = null;
+    let strokeId = 0; // 每个画布(write/cross)各自独立计数，互不影响
+    let strokePressures = [];
+    let strokeSpeeds = [];
+    let strokeStartT = 0;
+    let strokeMinX = Infinity, strokeMaxX = -Infinity, strokeMinY = Infinity, strokeMaxY = -Infinity;
+    let strokeSumX = 0, strokeSumY = 0, strokePointCount = 0;
+
+    function resize() {
+      const wrap = canvas.parentElement;
+      const rect = wrap.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = rect.width * dpr;
+      canvas.height = rect.height * dpr;
+      canvas.style.width = rect.width + 'px';
+      canvas.style.height = rect.height + 'px';
+      ctx.scale(dpr, dpr);
+      ctx.strokeStyle = options.color || 'rgba(240,240,240,0.9)';
+      ctx.lineWidth = options.width || 2.4;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+    }
+    resize();
+    window.addEventListener('resize', resize);
+
+    function normPoint(clientX, clientY) {
+      const rect = canvas.getBoundingClientRect();
+      return {
+        px: clientX - rect.left,
+        py: clientY - rect.top,
+        nx: (clientX - rect.left) / rect.width,
+        ny: (clientY - rect.top) / rect.height,
+      };
+    }
+
+    function onDown(e) {
+      drawing = true;
+      strokeId += 1;
+      const p = normPoint(e.clientX, e.clientY);
+      const t = performance.now() - sessionStart;
+      lastPoint = { x: p.px, y: p.py, t };
+
+      // 重置这一笔的汇总累加器
+      strokePressures = [];
+      strokeSpeeds = [];
+      strokeStartT = t;
+      strokeMinX = p.nx; strokeMaxX = p.nx; strokeMinY = p.ny; strokeMaxY = p.ny;
+      strokeSumX = 0; strokeSumY = 0; strokePointCount = 0;
+
+      const startPressure = (typeof e.pressure==='number' && e.pointerType!=='mouse')?e.pressure:0.5;
+      strokePressures.push(startPressure);
+      strokeSumX += p.nx; strokeSumY += p.ny; strokePointCount += 1;
+
+      ctx.beginPath();
+      ctx.moveTo(p.px, p.py);
+      sendMessage({ step: stepName, type:'point', stroke_id: strokeId, phase:'down',
+        x:p.nx, y:p.ny, pressure:startPressure, t_ms:t, speed:0, pointerType:e.pointerType||'unknown' });
+      if (options.onStart) options.onStart();
+      e.preventDefault();
+    }
+
+    function onMove(e) {
+      if (!drawing) return;
+      const p = normPoint(e.clientX, e.clientY);
+      const t = performance.now() - sessionStart;
+      const dt = Math.max((t - lastPoint.t) / 1000, 1/240);
+      const dist = Math.hypot(p.px - lastPoint.x, p.py - lastPoint.y);
+      const speed = dist / dt;
+
+      ctx.lineTo(p.px, p.py);
+      ctx.stroke();
+
+      const movePressure = (typeof e.pressure==='number' && e.pointerType!=='mouse')?e.pressure:0.5;
+      strokePressures.push(movePressure);
+      strokeSpeeds.push(speed);
+      strokeMinX = Math.min(strokeMinX, p.nx); strokeMaxX = Math.max(strokeMaxX, p.nx);
+      strokeMinY = Math.min(strokeMinY, p.ny); strokeMaxY = Math.max(strokeMaxY, p.ny);
+      strokeSumX += p.nx; strokeSumY += p.ny; strokePointCount += 1;
+
+      sendMessage({ step: stepName, type:'point', stroke_id: strokeId, phase:'move',
+        x:p.nx, y:p.ny, pressure:movePressure, t_ms:t, speed:speed, pointerType:e.pointerType||'unknown' });
+
+      lastPoint = { x: p.px, y: p.py, t };
+      e.preventDefault();
+    }
+
+    function onUp(e) {
+      if (!drawing) return;
+      drawing = false;
+      const p = normPoint(e.clientX, e.clientY);
+      const t = performance.now() - sessionStart;
+      const endPressure = (typeof e.pressure==='number' && e.pointerType!=='mouse')?e.pressure:0.5;
+      sendMessage({ step: stepName, type:'point', stroke_id: strokeId, phase:'up',
+        x:p.nx, y:p.ny, pressure:endPressure, t_ms:t, speed:0, pointerType:e.pointerType||'unknown' });
+
+      // 算这一笔的汇总数据(压力、速度平均/最大值、范围、时长、点数)
+      const avgPressure = strokePressures.reduce((a,b)=>a+b,0) / strokePressures.length;
+      const maxPressure = Math.max(...strokePressures);
+      const avgSpeed = strokeSpeeds.length ? strokeSpeeds.reduce((a,b)=>a+b,0)/strokeSpeeds.length : 0;
+      const maxSpeed = strokeSpeeds.length ? Math.max(...strokeSpeeds) : 0;
+      const durationMs = t - strokeStartT;
+      const centroidX = strokeSumX / strokePointCount;
+      const centroidY = strokeSumY / strokePointCount;
+
+      const summary = {
+        step: stepName, type: 'stroke_summary', stroke_id: strokeId,
+        avg_pressure: avgPressure, max_pressure: maxPressure,
+        avg_speed: avgSpeed, max_speed: maxSpeed,
+        duration_ms: durationMs, point_count: strokePointCount,
+        bbox: { x_min: strokeMinX, x_max: strokeMaxX, y_min: strokeMinY, y_max: strokeMaxY },
+        centroid: { x: centroidX, y: centroidY },
+        // 完整的逐点压力/速度序列(不只是均值)，
+        // 以后可以用来让光沿着这条线的长度方向有起伏(比如中途手慢下来的地方对应变暗/闪烁)，
+        // 而不是整条线只有一个统一的亮度值
+        pressure_profile: strokePressures,
+        speed_profile: strokeSpeeds
+      };
+      sendMessage(summary);
+
+      // 在专门的"每一笔汇总"区域显示，跟原始逐点日志分开，方便一眼看清
+      const line = document.createElement('div');
+      line.style.color = '#9ad';
+      line.textContent = `#${strokeId} [${stepName}]  avg压力=${avgPressure.toFixed(3)}  max压力=${maxPressure.toFixed(3)}  avg速度=${avgSpeed.toFixed(1)}  时长=${durationMs.toFixed(0)}ms  点数=${strokePointCount}`;
+      dbg.strokeLog.prepend(line);
+      while (dbg.strokeLog.children.length > 10) dbg.strokeLog.removeChild(dbg.strokeLog.lastChild);
+
+      lastPoint = null;
+      if (options.onEnd) options.onEnd();
+      e.preventDefault();
+    }
+
+    canvas.addEventListener('pointerdown', onDown);
+    canvas.addEventListener('pointermove', onMove);
+    canvas.addEventListener('pointerup', onUp);
+    canvas.addEventListener('pointercancel', onUp);
+    canvas.addEventListener('pointerleave', onUp);
+
+    return { resize, clear: () => ctx.clearRect(0,0,canvas.width,canvas.height), resetStroke: () => { strokeId = 0; } };
+  }
+
+  // ============ Step 1：手写 ============
+  const writeHandle = attachPointerCapture(writeCanvas, writeCtx, 'write', {
+    onEnd: () => {
+      hasWritten = true;
+      toStep2Btn.classList.remove('disabled');
+    }
+  });
+
+  clearStep1Btn.addEventListener('click', () => {
+    writeHandle.clear();
+    hasWritten = false;
+    toStep2Btn.classList.add('disabled');
+  });
+
+  toStep2Btn.addEventListener('click', () => {
+    if (!hasWritten) return;
+    goToStep(2);
+    requestAnimationFrame(() => {
+      // 把 step1 写好的内容原样搬到 step2 的静态图层上
+      const wrap2 = document.getElementById('wrap2');
+      const rect = wrap2.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      writtenLayer.width = rect.width * dpr;
+      writtenLayer.height = rect.height * dpr;
+      writtenLayer.style.width = rect.width + 'px';
+      writtenLayer.style.height = rect.height + 'px';
+      writtenCtx.setTransform(1,0,0,1,0,0);
+      writtenCtx.drawImage(writeCanvas, 0, 0, writtenLayer.width, writtenLayer.height);
+
+      crossHandle.resize();
+    });
+  });
+
+  // ============ Step 2：划掉（叠加在 writtenLayer 之上） ============
+  const crossHandle = attachPointerCapture(drawCanvas, drawCtx, 'cross', {
+    color: 'rgba(255,120,120,0.85)', // 划线用不同颜色，方便肉眼区分"写"和"划"
+    width: 2.4
+  });
+
+  toStep3Btn.addEventListener('click', () => {
+    finalLine.textContent = ''; // 最终剩下哪句话，等提炼逻辑定了再接上
+    goToStep(3);
+  });
+
+  // ============ Step 3 ============
+  restartBtn.addEventListener('click', () => {
+    writeHandle.clear();
+    crossHandle.clear();
+    hasWritten = false;
+    toStep2Btn.classList.add('disabled');
+    writeHandle.resetStroke();
+    crossHandle.resetStroke();
+    sessionStart = performance.now();
+    goToStep(1);
+  });
+
+  function goToStep(n) {
+    [step1, step2, step3].forEach((s, i) => s.classList.toggle('active', i === n-1));
+  }
+
+})();
+</script>
+</body>
+</html>
